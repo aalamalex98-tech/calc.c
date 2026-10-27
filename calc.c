@@ -109,19 +109,76 @@ static Value parse_integer(Parser *p)
     return make_integer(result);
 }
 
+/* Parse a decimal number such as 12.5 or 0.75. */
+static Value parse_decimal(Parser *p)
+{
+    skip_spaces(p);
+
+    size_t start = p->pos;
+    int digits_before = 0;
+    int digits_after = 0;
+
+    while (p->pos < p->length &&
+           isdigit((unsigned char)p->text[p->pos])) {
+        digits_before++;
+        p->pos++;
+    }
+
+    if (p->pos < p->length && p->text[p->pos] == '.') {
+        p->pos++;
+
+        while (p->pos < p->length &&
+               isdigit((unsigned char)p->text[p->pos])) {
+            digits_after++;
+            p->pos++;
+        }
+    }
+
+    if (digits_before == 0 || digits_after == 0) {
+        set_error(p, p->pos + 1);
+        return make_float(0.0);
+    }
+
+    size_t count = p->pos - start;
+    char *number = malloc(count + 1);
+
+    if (number == NULL) {
+        set_error(p, start + 1);
+        return make_float(0.0);
+    }
+
+    memcpy(number, p->text + start, count);
+    number[count] = '\0';
+
+    errno = 0;
+    char *end = NULL;
+    double result = strtod(number, &end);
+
+    if (errno == ERANGE || end == number || *end != '\0' ||
+        !isfinite(result)) {
+        set_error(p, start + 1);
+        free(number);
+        return make_float(0.0);
+    }
+
+    free(number);
+    return make_float(result);
+}
+
+
 int main(void)
 {
-    const char *input = "12345";
+    const char *input = "12.5";
     Parser parser = { input, strlen(input), 0, 0, 0 };
 
-    Value result = parse_integer(&parser);
+   Value result = parse_decimal(&parser);
 
     if (parser.failed) {
         printf("ERROR:%zu\n", parser.error_pos);
         return 1;
     }
 
-    printf("%lld\n", result.integer);
+    printf("%.2f\n", result.real);
     return 0;
 }
 
