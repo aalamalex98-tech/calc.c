@@ -17,6 +17,7 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <limits.h>
+#include <stdint.h>
 
 /* Store either an integer result or a floating-point result. */
 typedef struct {
@@ -617,16 +618,245 @@ static int process_file(const char *input_name, const char *output_name)
     return status == 2 ? 0 : status;
 }
 
-/*
- * Temporary interface for testing file processing.
- * The required -d and -o options will be added in a later step.
- */
-int main(int argc, char *argv[])
+
+/* Join a directory and filename into one allocated path. */
+static char *join_path(const char *directory, const char *filename)
 {
-    if (argc != 3) {
-        fprintf(stderr, "Usage: %s input.txt output.txt\n", argv[0]);
+    size_t dlen = strlen(directory);
+    size_t flen = strlen(filename);
+    int separator = dlen > 0 && directory[dlen - 1] != '/';
+
+    if (dlen > SIZE_MAX - flen - (size_t)separator - 1) {
+        return NULL;
+    }
+
+    size_t length = dlen + flen + (size_t)separator + 1;
+    char *path = malloc(length);
+
+    if (path == NULL) {
+        return NULL;
+    }
+
+    snprintf(path, length, "%s%s%s",
+             directory, separator ? "/" : "", filename);
+    return path;
+}
+
+static const char *base_name(const char *path)
+{
+    const char *slash = strrchr(path, '/');
+    return slash == NULL ? path : slash + 1;
+}
+
+static char *input_base_name(const char *path)
+{
+    const char *base = base_name(path);
+    size_t length = strlen(base);
+
+    if (length >= 4 && strcmp(base + length - 4, ".txt") == 0) {
+        length -= 4;
+    }
+
+    char *result = malloc(length + 1);
+    if (result == NULL) {
+        return NULL;
+    }
+
+    memcpy(result, base, length);
+    result[length] = '\0';
+    return result;
+}
+
+static int ensure_directory(const char *path)
+{
+    struct stat info;
+
+    if (stat(path, &info) == 0) {
+        if (S_ISDIR(info.st_mode)) {
+            return 0;
+        }
+        fprintf(stderr, "Output path is not a directory: %s\n", path);
         return 1;
     }
 
-    return process_file(argv[1], argv[2]);
+    if (mkdir(path, 0777) != 0) {
+        perror(path);
+        return 1;
+    }
+
+    return 0;
+}
+
+static char *make_output_path(const char *outdir, const char *input)
+{
+    char *base = input_base_name(input);
+    if (base == NULL) {
+        return NULL;
+    }
+
+    int needed = snprintf(NULL, 0, "%s_Alex_Aalam_251ADB029.txt", base);
+    if (needed < 0) {
+        free(base);
+        return NULL;
+    }
+
+    char *filename = malloc((size_t)needed + 1);
+    if (filename == NULL) {
+        free(base);
+        return NULL;
+    }
+
+    snprintf(filename, (size_t)needed + 1,
+             "%s_Alex_Aalam_251ADB029.txt", base);
+    free(base);
+
+    char *path = join_path(outdir, filename);
+    free(filename);
+    return path;
+}
+
+static int process_directory(const char *directory, const char *outdir)
+{
+    DIR *dir = opendir(directory);
+    if (dir == NULL) {
+        perror(directory);
+        return 1;
+    }
+
+    int status = 0;
+    struct dirent *entry;
+
+    while ((entry = readdir(dir)) != NULL) {
+        size_t length = strlen(entry->d_name);
+
+        if (length < 4 ||
+            strcmp(entry->d_name + length - 4, ".txt") != 0) {
+            continue;
+        }
+
+        char *input_path = join_path(directory, entry->d_name);
+        if (input_path == NULL) {
+            status = 1;
+            break;
+        }
+
+        struct stat info;
+        if (stat(input_path, &info) != 0 || !S_ISREG(info.st_mode)) {
+            free(input_path);
+            continue;
+        }
+
+        char *output_path = make_output_path(outdir, input_path);
+        if (output_path == NULL) {
+            free(input_path);
+            status = 1;
+            break;
+        }
+
+        if (process_file(input_path, output_path) != 0) {
+            status = 1;
+        }
+
+        free(input_path);
+        free(output_path);
+    }
+
+    if (closedir(dir) != 0) {
+        perror("Error closing input directory");
+        status = 1;
+    }
+
+    return status;
+}
+
+int main(int argc, char *argv[])
+{
+    const char *input_file = NULL;
+    const char *input_dir = NULL;
+    const char *output_dir = NULL;
+
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "-d") == 0 ||
+            strcmp(argv[i], "--dir") == 0) {
+            if (i + 1 >= argc || input_dir != NULL || input_file != NULL) {
+                fprintf(stderr, "Invalid directory option.\n");
+                return 1;
+            }
+            input_dir = argv[++i];
+        } else if (strcmp(argv[i], "-o") == 0 ||
+                   strcmp(argv[i], "--output-dir") == 0) {
+            if (i + 1 >= argc || output_dir != NULL) {
+                fprintf(stderr, "Invalid output option.\n");
+                return 1;
+            }
+            output_dir = argv[++i];
+        } else if (argv[i][0] == '-') {
+            fprintf(stderr, "Unknown option: %s\n", argv[i]);
+            return 1;
+        } else {
+            if (input_file != NULL || input_dir != NULL) {
+                fprintf(stderr, "Specify one input file or one directory.\n");
+                return 1;
+            }
+            input_file = argv[i];
+        }
+    }
+
+    if ((input_file == NULL) == (input_dir == NULL)) {
+        fprintf(stderr,
+                "Usage: %s [-d DIR] [-o OUTDIR] [input.txt]\n", argv[0]);
+        return 1;
+    }
+
+    char *default_dir = NULL;
+
+    if (output_dir == NULL) {
+        char *base = input_base_name(
+            input_file != NULL ? input_file : input_dir);
+
+        if (base == NULL) {
+            return 1;
+        }
+
+        int needed = snprintf(NULL, 0, "%s_Alex_Aalam_251ADB029", base);
+        if (needed < 0) {
+            free(base);
+            return 1;
+        }
+
+        default_dir = malloc((size_t)needed + 1);
+        if (default_dir == NULL) {
+            free(base);
+            return 1;
+        }
+
+        snprintf(default_dir, (size_t)needed + 1,
+                 "%s_Alex_Aalam_251ADB029", base);
+        free(base);
+        output_dir = default_dir;
+    }
+
+    if (ensure_directory(output_dir) != 0) {
+        free(default_dir);
+        return 1;
+    }
+
+    int status;
+
+    if (input_dir != NULL) {
+        status = process_directory(input_dir, output_dir);
+    } else {
+        char *output_path = make_output_path(output_dir, input_file);
+
+        if (output_path == NULL) {
+            free(default_dir);
+            return 1;
+        }
+
+        status = process_file(input_file, output_path);
+        free(output_path);
+    }
+
+    free(default_dir);
+    return status;
 }
