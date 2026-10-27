@@ -135,10 +135,9 @@ static Value parse_decimal(Parser *p)
     }
 
     if (digits_before == 0 || digits_after == 0) {
-        set_error(p, p->pos + 1);
-        return make_float(0.0);
-    }
-
+    set_error(p, start + digits_before + 1);
+    return make_float(0.0);
+}
     size_t count = p->pos - start;
     char *number = malloc(count + 1);
 
@@ -168,25 +167,27 @@ static Value parse_decimal(Parser *p)
 /* Forward declaration allows parentheses to contain expressions. */
 static Value parse_expression(Parser *p);
 
+
 /*
  * Parse a number or parenthesized expression.
- * Unary signs are handled here before the arithmetic operators.
+ * Unary plus and minus are not allowed by the assignment.
  */
 static Value parse_primary(Parser *p)
 {
     skip_spaces(p);
 
-    int negative = 0;
-
+    /* Reject unary signs at the beginning of an expression. */
     if (p->pos < p->length &&
         (p->text[p->pos] == '+' ||
          p->text[p->pos] == '-')) {
-        negative = (p->text[p->pos] == '-');
-        p->pos++;
-        skip_spaces(p);
+        set_error(p, p->pos + 1);
+        return make_integer(0);
     }
 
-    if (p->pos < p->length && p->text[p->pos] == '(') {
+    /* Parse a parenthesized expression. */
+    if (p->pos < p->length &&
+        p->text[p->pos] == '(') {
+
         p->pos++;
 
         Value result = parse_expression(p);
@@ -196,20 +197,17 @@ static Value parse_primary(Parser *p)
             return make_integer(0);
         }
 
-        if (p->pos >= p->length || p->text[p->pos] != ')') {
+        if (p->pos >= p->length ||
+            p->text[p->pos] != ')') {
             set_error(p, p->pos + 1);
             return make_integer(0);
         }
 
         p->pos++;
-
-        if (negative) {
-            return make_float(-result.real);
-        }
-
         return result;
     }
 
+    /* A number must begin with a digit. */
     if (p->pos >= p->length ||
         !isdigit((unsigned char)p->text[p->pos])) {
         set_error(p, p->pos + 1);
@@ -235,12 +233,10 @@ static Value parse_primary(Parser *p)
         return make_integer(0);
     }
 
-    if (negative) {
-        return make_float(-result.real);
-    }
-
     return result;
 }
+
+
 
 /* Parse exponentiation from right to left: 2**3**2 = 2**(3**2). */
 static Value parse_power(Parser *p)
@@ -261,14 +257,18 @@ static Value parse_power(Parser *p)
             return make_float(0.0);
         }
 
-        errno = 0;
-        double result = pow(base.real, exponent.real);
+        if (exponent.real < 0.0) {
+    set_error(p, operator_pos + 4);
+    return make_float(0.0);
+}
 
-        if (errno == ERANGE || !isfinite(result) ||
-            (base.real == 0.0 && exponent.real < 0.0)) {
-            set_error(p, operator_pos + 1);
-            return make_float(0.0);
-        }
+errno = 0;
+double result = pow(base.real, exponent.real);
+
+if (errno == ERANGE || !isfinite(result)) {
+    set_error(p, operator_pos + 1);
+    return make_float(0.0);
+}
 
         return make_float(result);
     }
@@ -561,20 +561,40 @@ static int process_file(const char *input_name, const char *output_name)
             }
 
             if (parser.failed) {
-                size_t absolute_error =
-                    file_position + parser.error_pos;
+    size_t absolute_error =
+        file_position + parser.error_pos;
 
-                if (fprintf(output, "ERROR:%zu\n",
-                            absolute_error) < 0) {
-                    status = 1;
-                } else {
-                    /* An expression error is a normal result. */
-                    status = 2;
-                }
+    /*
+     * Discard results written before the error.
+     * The output must contain only the first error.
+     */
+    if (fclose(output) != 0) {
+        fprintf(stderr, "Error writing output file.\n");
+        free(line);
+        status = 1;
+        break;
+    }
 
-                free(line);
-                break;
-            }
+    output = fopen(output_name, "w");
+
+    if (output == NULL) {
+        fprintf(stderr, "Cannot reopen output file: %s\n",
+                output_name);
+        free(line);
+        status = 1;
+        break;
+    }
+
+    if (fprintf(output, "ERROR:%zu\n",
+                absolute_error) < 0) {
+        status = 1;
+    } else {
+        status = 2;
+    }
+
+    free(line);
+    break;
+}
 
             if (result.is_float) {
                 if (fprintf(output, "%.15g\n", result.real) < 0) {
