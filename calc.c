@@ -211,7 +211,6 @@ static Value parse_primary(Parser *p)
     return parse_integer(p);
 }
 
-/* Temporary expression parser; operators will be added later. */
 
 /* Parse exponentiation from right to left. */
 static Value parse_power(Parser *p)
@@ -246,7 +245,6 @@ static Value parse_power(Parser *p)
     return base;
 }
 
-/* Parse an expression using exponentiation. */
 
 /* Parse multiplication and division after exponentiation. */
 static Value parse_term(Parser *p)
@@ -302,16 +300,58 @@ static Value parse_term(Parser *p)
     return result;
 }
 
-/* Parse an expression using multiplication and division. */
-static Value parse_expression(Parser *p)
+/* Parse addition and subtraction after multiplication and division. */
+static Value parse_sum(Parser *p)
 {
-    return parse_term(p);
+    Value result = parse_term(p);
+
+    while (!p->failed) {
+        skip_spaces(p);
+
+        if (p->pos >= p->length) {
+            break;
+        }
+
+        char op = p->text[p->pos];
+
+        if (op != '+' && op != '-') {
+            break;
+        }
+
+        p->pos++;
+        skip_spaces(p);
+
+        size_t right_start = p->pos;
+        Value right = parse_term(p);
+
+        if (p->failed) {
+            break;
+        }
+
+        double value = (op == '+')
+            ? result.real + right.real
+            : result.real - right.real;
+
+        if (!isfinite(value)) {
+            set_error(p, right_start + 1);
+            break;
+        }
+
+        result = make_float(value);
+    }
+
+    return result;
 }
 
+/* Parse a complete arithmetic expression. */
+static Value parse_expression(Parser *p)
+{
+    return parse_sum(p);
+}
 
 int main(void)
 {
-   const char *input = "2*3**2";
+       const char *input = "(25)";
     Parser parser = { input, strlen(input), 0, 0, 0 };
 
     Value result = parse_expression(&parser);
