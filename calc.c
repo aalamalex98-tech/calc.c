@@ -1,10 +1,12 @@
-
 /*
  * Name: Alex Aalam
  * Student ID: 251ADB029
+ * Resources / AI tools: OpenAI ChatGPT (programming explanations, debugging,
+ * and review); C standard library documentation (stdio.h, stdlib.h, string.h,
+ * ctype.h, math.h, errno.h, dirent.h, sys/stat.h, sys/types.h, limits.h,
+ * stdint.h). Conversation history for ChatGPT assistance is submitted separately.
  * Repository: https://github.com/aalamalex98-tech/calc.c
  * Compile with: gcc -O2 -Wall -Wextra -std=c17 -o calc calc.c -lm
- * Resources used: OpenAI ChatGPT for programming guidance and debugging.
  */
 
 #include <stdio.h>
@@ -19,6 +21,12 @@
 #include <limits.h>
 #include <stdint.h>
 
+/* AI (ChatGPT): prompt to ask separately: "Explain how a C struct can store
+ * both an integer and a floating-point value, and how a flag can identify
+ * which representation is active." I used the explanation to understand this
+ * representation; the struct below is the implementation in my program.
+ * Conversation history: submit the actual ChatGPT conversation separately.
+ */
 /* Store either an integer result or a floating-point result. */
 typedef struct {
     long long integer;
@@ -169,6 +177,13 @@ static Value parse_expression(Parser *p);
 
 
 /*
+ * AI (ChatGPT): prompt to ask separately: "Explain recursive-descent parsing
+ * for primary expressions, especially how parentheses call parse_expression
+ * and then require a closing parenthesis. Also explain how to reject unary
+ * plus and minus." I used the explanation to understand this parser function.
+ * Conversation history: submit the actual ChatGPT conversation separately.
+ */
+/*
  * Parse a number or parenthesized expression.
  * Unary plus and minus are not allowed by the assignment.
  */
@@ -238,6 +253,13 @@ static Value parse_primary(Parser *p)
 
 
 
+/*
+ * AI (ChatGPT): prompt to ask separately: "Why should exponentiation in a
+ * recursive-descent parser be right-associative, and how can parse_power
+ * implement 2**3**2 as 2**(3**2)?" I used the explanation to understand
+ * operator associativity; I checked the behavior against my assignment.
+ * Conversation history: submit the actual ChatGPT conversation separately.
+ */
 /* Parse exponentiation from right to left: 2**3**2 = 2**(3**2). */
 static Value parse_power(Parser *p)
 {
@@ -431,12 +453,26 @@ static Value parse_sum(Parser *p)
     return result;
 }
 
+/*
+ * AI (ChatGPT): prompt to ask separately: "Explain how a recursive-descent
+ * parser can use precedence levels for arithmetic: primary, power, term,
+ * sum, and expression. Explain how each function delegates to the next."
+ * I used the explanation to understand the parser structure.
+ * Conversation history: submit the actual ChatGPT conversation separately.
+ */
 /* Parse a complete arithmetic expression. */
 static Value parse_expression(Parser *p)
 {
     return parse_sum(p);
 }
 
+/*
+ * AI (ChatGPT): prompt to ask separately: "Explain how to read a complete
+ * input line in C using fgetc, malloc and realloc, including doubling the
+ * buffer capacity and checking allocation failures." I used the explanation
+ * to understand the buffer-growth approach and adapted it in this function.
+ * Conversation history: submit the actual ChatGPT conversation separately.
+ */
 /*
  * Read one complete line, growing the buffer when necessary.
  * This avoids imposing a small fixed maximum expression length.
