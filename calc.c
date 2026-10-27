@@ -247,14 +247,71 @@ static Value parse_power(Parser *p)
 }
 
 /* Parse an expression using exponentiation. */
+
+/* Parse multiplication and division after exponentiation. */
+static Value parse_term(Parser *p)
+{
+    Value result = parse_power(p);
+
+    while (!p->failed) {
+        skip_spaces(p);
+
+        if (p->pos >= p->length) {
+            break;
+        }
+
+        char op = p->text[p->pos];
+
+        if (op != '*' && op != '/') {
+            break;
+        }
+
+        if (op == '*' &&
+            p->pos + 1 < p->length &&
+            p->text[p->pos + 1] == '*') {
+            break;
+        }
+
+        p->pos++;
+        skip_spaces(p);
+
+        size_t right_start = p->pos;
+        Value right = parse_power(p);
+
+        if (p->failed) {
+            break;
+        }
+
+        if (op == '/' && right.real == 0.0) {
+            set_error(p, right_start + 1);
+            break;
+        }
+
+        double value = (op == '*')
+            ? result.real * right.real
+            : result.real / right.real;
+
+        if (!isfinite(value)) {
+            set_error(p, right_start + 1);
+            break;
+        }
+
+        result = make_float(value);
+    }
+
+    return result;
+}
+
+/* Parse an expression using multiplication and division. */
 static Value parse_expression(Parser *p)
 {
-    return parse_power(p);
+    return parse_term(p);
 }
+
 
 int main(void)
 {
-    const char *input = "(25)";
+   const char *input = "2*3**2";
     Parser parser = { input, strlen(input), 0, 0, 0 };
 
     Value result = parse_expression(&parser);
