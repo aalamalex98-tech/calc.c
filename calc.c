@@ -56,13 +56,72 @@ static Value make_float(double n)
     return v;
 }
 
+
+/* Skip spaces and tabs before reading a number. */
+static void skip_spaces(Parser *p)
+{
+    while (p->pos < p->length &&
+           (p->text[p->pos] == ' ' || p->text[p->pos] == '\t')) {
+        p->pos++;
+    }
+}
+
+/* Parse an integer literal and detect values outside its range. */
+static Value parse_integer(Parser *p)
+{
+    skip_spaces(p);
+
+    if (p->pos >= p->length ||
+        !isdigit((unsigned char)p->text[p->pos])) {
+        set_error(p, p->pos + 1);
+        return make_integer(0);
+    }
+
+    size_t start = p->pos;
+
+    while (p->pos < p->length &&
+           isdigit((unsigned char)p->text[p->pos])) {
+        p->pos++;
+    }
+
+    size_t count = p->pos - start;
+    char *number = malloc(count + 1);
+
+    if (number == NULL) {
+        set_error(p, start + 1);
+        return make_integer(0);
+    }
+
+    memcpy(number, p->text + start, count);
+    number[count] = '\0';
+
+    errno = 0;
+    char *end = NULL;
+    long long result = strtoll(number, &end, 10);
+
+    if (errno == ERANGE || end == number || *end != '\0') {
+        set_error(p, start + 1);
+        free(number);
+        return make_integer(0);
+    }
+
+    free(number);
+    return make_integer(result);
+}
+
 int main(void)
 {
-    Value whole = make_integer(12);
-    Value decimal = make_float(3.5);
+    const char *input = "12345";
+    Parser parser = { input, strlen(input), 0, 0, 0 };
 
-    printf("Integer value: %lld\n", whole.integer);
-    printf("Decimal value: %.1f\n", decimal.real);
+    Value result = parse_integer(&parser);
 
+    if (parser.failed) {
+        printf("ERROR:%zu\n", parser.error_pos);
+        return 1;
+    }
+
+    printf("%lld\n", result.integer);
     return 0;
 }
+
