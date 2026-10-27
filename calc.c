@@ -16,6 +16,7 @@
 #include <dirent.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <limits.h>
 
 /* Store either an integer result or a floating-point result. */
 typedef struct {
@@ -24,7 +25,7 @@ typedef struct {
     int is_float;
 } Value;
 
-/* Keep track of the expression and the first parsing error. */
+/* Track the expression and the first parsing error. */
 typedef struct {
     const char *text;
     size_t length;
@@ -33,7 +34,7 @@ typedef struct {
     int failed;
 } Parser;
 
-/* Record the first error position only. */
+/* Record only the first error. */
 static void set_error(Parser *p, size_t pos)
 {
     if (!p->failed) {
@@ -42,31 +43,29 @@ static void set_error(Parser *p, size_t pos)
     }
 }
 
-/* Create an integer value. */
 static Value make_integer(long long n)
 {
     Value v = { n, (double)n, 0 };
     return v;
 }
 
-/* Create a floating-point value. */
 static Value make_float(double n)
 {
     Value v = { 0, n, 1 };
     return v;
 }
 
-
-/* Skip spaces and tabs before reading a number. */
+/* Skip spaces and tabs while preserving character positions. */
 static void skip_spaces(Parser *p)
 {
     while (p->pos < p->length &&
-           (p->text[p->pos] == ' ' || p->text[p->pos] == '\t')) {
+           (p->text[p->pos] == ' ' ||
+            p->text[p->pos] == '\t')) {
         p->pos++;
     }
 }
 
-/* Parse an integer literal and detect values outside its range. */
+/* Parse an integer and detect values outside the integer range. */
 static Value parse_integer(Parser *p)
 {
     skip_spaces(p);
@@ -109,7 +108,7 @@ static Value parse_integer(Parser *p)
     return make_integer(result);
 }
 
-/* Parse a decimal number such as 12.5 or 0.75. */
+/* Parse a decimal such as 12.5 or 0.75. */
 static Value parse_decimal(Parser *p)
 {
     skip_spaces(p);
@@ -154,8 +153,8 @@ static Value parse_decimal(Parser *p)
     char *end = NULL;
     double result = strtod(number, &end);
 
-    if (errno == ERANGE || end == number || *end != '\0' ||
-        !isfinite(result)) {
+    if (errno == ERANGE || end == number ||
+        *end != '\0' || !isfinite(result)) {
         set_error(p, start + 1);
         free(number);
         return make_float(0.0);
@@ -165,21 +164,36 @@ static Value parse_decimal(Parser *p)
     return make_float(result);
 }
 
-
-/* Declare the expression parser before it is used. */
+/* Forward declaration allows parentheses to contain expressions. */
 static Value parse_expression(Parser *p);
 
-/* Parse an integer, decimal, or parenthesized expression. */
+/*
+ * Parse a number or parenthesized expression.
+ * Unary signs are handled here before the arithmetic operators.
+ */
 static Value parse_primary(Parser *p)
 {
     skip_spaces(p);
 
-    /* Handle parentheses. */
+    int negative = 0;
+
+    if (p->pos < p->length &&
+        (p->text[p->pos] == '+' ||
+         p->text[p->pos] == '-')) {
+        negative = (p->text[p->pos] == '-');
+        p->pos++;
+        skip_spaces(p);
+    }
+
     if (p->pos < p->length && p->text[p->pos] == '(') {
         p->pos++;
 
         Value result = parse_expression(p);
         skip_spaces(p);
+
+        if (p->failed) {
+            return make_integer(0);
+        }
 
         if (p->pos >= p->length || p->text[p->pos] != ')') {
             set_error(p, p->pos + 1);
@@ -187,10 +201,14 @@ static Value parse_primary(Parser *p)
         }
 
         p->pos++;
+
+        if (negative) {
+            return make_float(-result.real);
+        }
+
         return result;
     }
 
-    /* Require a number if there is no opening parenthesis. */
     if (p->pos >= p->length ||
         !isdigit((unsigned char)p->text[p->pos])) {
         set_error(p, p->pos + 1);
@@ -204,15 +222,26 @@ static Value parse_primary(Parser *p)
         i++;
     }
 
+    Value result;
+
     if (i < p->length && p->text[i] == '.') {
-        return parse_decimal(p);
+        result = parse_decimal(p);
+    } else {
+        result = parse_integer(p);
     }
 
-    return parse_integer(p);
+    if (p->failed) {
+        return make_integer(0);
+    }
+
+    if (negative) {
+        return make_float(-result.real);
+    }
+
+    return result;
 }
 
-
-/* Parse exponentiation from right to left. */
+/* Parse exponentiation from right to left: 2**3**2 = 2**(3**2). */
 static Value parse_power(Parser *p)
 {
     Value base = parse_primary(p);
@@ -234,7 +263,8 @@ static Value parse_power(Parser *p)
         errno = 0;
         double result = pow(base.real, exponent.real);
 
-        if (errno == ERANGE || !isfinite(result)) {
+        if (errno == ERANGE || !isfinite(result) ||
+            (base.real == 0.0 && exponent.real < 0.0)) {
             set_error(p, operator_pos + 1);
             return make_float(0.0);
         }
@@ -244,7 +274,6 @@ static Value parse_power(Parser *p)
 
     return base;
 }
-
 
 /* Parse multiplication and division after exponentiation. */
 static Value parse_term(Parser *p)
@@ -264,6 +293,7 @@ static Value parse_term(Parser *p)
             break;
         }
 
+        /* Two stars together belong to exponentiation. */
         if (op == '*' &&
             p->pos + 1 < p->length &&
             p->text[p->pos + 1] == '*') {
@@ -285,16 +315,46 @@ static Value parse_term(Parser *p)
             break;
         }
 
-        double value = (op == '*')
-            ? result.real * right.real
-            : result.real / right.real;
+        if (!result.is_float && !right.is_float) {
+            if (op == '/') {
+                if (result.integer == LLONG_MIN &&
+                    right.integer == -1) {
+                    set_error(p, right_start + 1);
+                    break;
+                }
 
-        if (!isfinite(value)) {
-            set_error(p, right_start + 1);
-            break;
+                result = make_integer(
+                    result.integer / right.integer
+                );
+            } else {
+                long long a = result.integer;
+                long long b = right.integer;
+
+                if (a != 0 && b != 0 &&
+                    ((a == -1 && b == LLONG_MIN) ||
+                     (b == -1 && a == LLONG_MIN) ||
+                     (a > 0 && b > 0 && a > LLONG_MAX / b) ||
+                     (a > 0 && b < 0 && b < LLONG_MIN / a) ||
+                     (a < 0 && b > 0 && a < LLONG_MIN / b) ||
+                     (a < 0 && b < 0 && a < LLONG_MAX / b))) {
+                    set_error(p, right_start + 1);
+                    break;
+                }
+
+                result = make_integer(a * b);
+            }
+        } else {
+            double value = (op == '*')
+                ? result.real * right.real
+                : result.real / right.real;
+
+            if (!isfinite(value)) {
+                set_error(p, right_start + 1);
+                break;
+            }
+
+            result = make_float(value);
         }
-
-        result = make_float(value);
     }
 
     return result;
@@ -328,16 +388,43 @@ static Value parse_sum(Parser *p)
             break;
         }
 
-        double value = (op == '+')
-            ? result.real + right.real
-            : result.real - right.real;
+        if (!result.is_float && !right.is_float) {
+            long long a = result.integer;
+            long long b = right.integer;
+            int overflow = 0;
 
-        if (!isfinite(value)) {
-            set_error(p, right_start + 1);
-            break;
+            if (op == '+') {
+                if ((b > 0 && a > LLONG_MAX - b) ||
+                    (b < 0 && a < LLONG_MIN - b)) {
+                    overflow = 1;
+                }
+            } else {
+                if ((b < 0 && a > LLONG_MAX + b) ||
+                    (b > 0 && a < LLONG_MIN + b)) {
+                    overflow = 1;
+                }
+            }
+
+            if (overflow) {
+                set_error(p, right_start + 1);
+                break;
+            }
+
+            result = make_integer(op == '+'
+                ? a + b
+                : a - b);
+        } else {
+            double value = (op == '+')
+                ? result.real + right.real
+                : result.real - right.real;
+
+            if (!isfinite(value)) {
+                set_error(p, right_start + 1);
+                break;
+            }
+
+            result = make_float(value);
         }
-
-        result = make_float(value);
     }
 
     return result;
@@ -349,23 +436,197 @@ static Value parse_expression(Parser *p)
     return parse_sum(p);
 }
 
-int main(void)
+/*
+ * Read one complete line, growing the buffer when necessary.
+ * This avoids imposing a small fixed maximum expression length.
+ */
+static char *read_line(FILE *input, size_t *line_length)
 {
-       const char *input = "(25)";
-    Parser parser = { input, strlen(input), 0, 0, 0 };
+    size_t capacity = 128;
+    size_t length = 0;
+    char *line = malloc(capacity);
 
-    Value result = parse_expression(&parser);
-    skip_spaces(&parser);
-
-    if (!parser.failed && parser.pos < parser.length) {
-        set_error(&parser, parser.pos + 1);
+    if (line == NULL) {
+        return NULL;
     }
 
-    if (parser.failed) {
-        printf("ERROR:%zu\n", parser.error_pos);
+    int ch;
+
+    while ((ch = fgetc(input)) != EOF) {
+        if (ch == '\n') {
+            break;
+        }
+
+        if (length + 1 >= capacity) {
+            if (capacity > (size_t)-1 / 2) {
+                free(line);
+                return NULL;
+            }
+
+            size_t new_capacity = capacity * 2;
+            char *new_line = realloc(line, new_capacity);
+
+            if (new_line == NULL) {
+                free(line);
+                return NULL;
+            }
+
+            line = new_line;
+            capacity = new_capacity;
+        }
+
+        line[length++] = (char)ch;
+    }
+
+    if (ch == EOF && length == 0) {
+        free(line);
+        return NULL;
+    }
+
+    line[length] = '\0';
+    *line_length = length;
+    return line;
+}
+
+/*
+ * Process one input file. Blank lines and comment lines are ignored.
+ * Error positions count all characters from the beginning of the file.
+ */
+static int process_file(const char *input_name, const char *output_name)
+{
+    FILE *input = fopen(input_name, "r");
+
+    if (input == NULL) {
+        fprintf(stderr, "Cannot open input file: %s\n", input_name);
         return 1;
     }
 
-    printf("%.2f\n", result.real);
-    return 0;
+    FILE *output = fopen(output_name, "w");
+
+    if (output == NULL) {
+        fprintf(stderr, "Cannot open output file: %s\n", output_name);
+        fclose(input);
+        return 1;
+    }
+
+    size_t file_position = 0;
+    int status = 0;
+
+    for (;;) {
+        size_t line_length = 0;
+        char *line = read_line(input, &line_length);
+
+        if (line == NULL) {
+            if (ferror(input)) {
+                fprintf(stderr, "Error reading input file.\n");
+                status = 1;
+            }
+            break;
+        }
+
+        /*
+         * Determine whether the line ended with a newline.
+         * read_line consumes the newline itself.
+         */
+        int next_char = fgetc(input);
+        int has_newline = (next_char != EOF);
+
+        if (has_newline && ungetc(next_char, input) == EOF) {
+            fprintf(stderr, "Error reading input file.\n");
+            free(line);
+            status = 1;
+            break;
+        }
+
+        size_t first = 0;
+
+        while (first < line_length &&
+               (line[first] == ' ' || line[first] == '\t' ||
+                line[first] == '\r')) {
+            first++;
+        }
+
+        /* Ignore blank lines and comment lines. */
+        if (first < line_length && line[first] != '#') {
+            Parser parser = {
+                line, line_length, 0, 0, 0
+            };
+
+            Value result = parse_expression(&parser);
+            skip_spaces(&parser);
+
+            if (!parser.failed && parser.pos < parser.length) {
+                set_error(&parser, parser.pos + 1);
+            }
+
+            if (parser.failed) {
+                size_t absolute_error =
+                    file_position + parser.error_pos;
+
+                if (fprintf(output, "ERROR:%zu\n",
+                            absolute_error) < 0) {
+                    status = 1;
+                } else {
+                    /* An expression error is a normal result. */
+                    status = 2;
+                }
+
+                free(line);
+                break;
+            }
+
+            if (result.is_float) {
+                if (fprintf(output, "%.15g\n", result.real) < 0) {
+                    status = 1;
+                }
+            } else {
+                if (fprintf(output, "%lld\n", result.integer) < 0) {
+                    status = 1;
+                }
+            }
+
+            if (status == 1) {
+                free(line);
+                break;
+            }
+        }
+
+        file_position += line_length;
+
+        if (has_newline) {
+            file_position++;
+        }
+
+        free(line);
+
+        if (!has_newline) {
+            break;
+        }
+    }
+
+    if (fclose(input) != 0) {
+        fprintf(stderr, "Error closing input file.\n");
+        status = 1;
+    }
+
+    if (fclose(output) != 0) {
+        fprintf(stderr, "Error writing output file.\n");
+        status = 1;
+    }
+
+    return status == 2 ? 0 : status;
+}
+
+/*
+ * Temporary interface for testing file processing.
+ * The required -d and -o options will be added in a later step.
+ */
+int main(int argc, char *argv[])
+{
+    if (argc != 3) {
+        fprintf(stderr, "Usage: %s input.txt output.txt\n", argv[0]);
+        return 1;
+    }
+
+    return process_file(argv[1], argv[2]);
 }
