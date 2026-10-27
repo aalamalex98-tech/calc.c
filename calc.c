@@ -212,9 +212,44 @@ static Value parse_primary(Parser *p)
 }
 
 /* Temporary expression parser; operators will be added later. */
+
+/* Parse exponentiation from right to left. */
+static Value parse_power(Parser *p)
+{
+    Value base = parse_primary(p);
+    skip_spaces(p);
+
+    if (p->pos + 1 < p->length &&
+        p->text[p->pos] == '*' &&
+        p->text[p->pos + 1] == '*') {
+
+        size_t operator_pos = p->pos;
+        p->pos += 2;
+
+        Value exponent = parse_power(p);
+
+        if (p->failed) {
+            return make_float(0.0);
+        }
+
+        errno = 0;
+        double result = pow(base.real, exponent.real);
+
+        if (errno == ERANGE || !isfinite(result)) {
+            set_error(p, operator_pos + 1);
+            return make_float(0.0);
+        }
+
+        return make_float(result);
+    }
+
+    return base;
+}
+
+/* Parse an expression using exponentiation. */
 static Value parse_expression(Parser *p)
 {
-    return parse_primary(p);
+    return parse_power(p);
 }
 
 int main(void)
