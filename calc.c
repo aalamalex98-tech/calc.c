@@ -166,12 +166,68 @@ static Value parse_decimal(Parser *p)
 }
 
 
+/* Declare the expression parser before it is used. */
+static Value parse_expression(Parser *p);
+
+/* Parse an integer, decimal, or parenthesized expression. */
+static Value parse_primary(Parser *p)
+{
+    skip_spaces(p);
+
+    /* Handle parentheses. */
+    if (p->pos < p->length && p->text[p->pos] == '(') {
+        p->pos++;
+
+        Value result = parse_expression(p);
+        skip_spaces(p);
+
+        if (p->pos >= p->length || p->text[p->pos] != ')') {
+            set_error(p, p->pos + 1);
+            return make_integer(0);
+        }
+
+        p->pos++;
+        return result;
+    }
+
+    /* Require a number if there is no opening parenthesis. */
+    if (p->pos >= p->length ||
+        !isdigit((unsigned char)p->text[p->pos])) {
+        set_error(p, p->pos + 1);
+        return make_integer(0);
+    }
+
+    size_t i = p->pos;
+
+    while (i < p->length &&
+           isdigit((unsigned char)p->text[i])) {
+        i++;
+    }
+
+    if (i < p->length && p->text[i] == '.') {
+        return parse_decimal(p);
+    }
+
+    return parse_integer(p);
+}
+
+/* Temporary expression parser; operators will be added later. */
+static Value parse_expression(Parser *p)
+{
+    return parse_primary(p);
+}
+
 int main(void)
 {
-    const char *input = "12.5";
+    const char *input = "(25)";
     Parser parser = { input, strlen(input), 0, 0, 0 };
 
-   Value result = parse_decimal(&parser);
+    Value result = parse_expression(&parser);
+    skip_spaces(&parser);
+
+    if (!parser.failed && parser.pos < parser.length) {
+        set_error(&parser, parser.pos + 1);
+    }
 
     if (parser.failed) {
         printf("ERROR:%zu\n", parser.error_pos);
@@ -181,4 +237,3 @@ int main(void)
     printf("%.2f\n", result.real);
     return 0;
 }
-
