@@ -1,6 +1,7 @@
 /*
  * Name: Alex Aalam
  * Student ID: 251ADB029
+ Chat-gpt conversation:-https://chatgpt.com/share/6ae13e57-9ff4-83ee-af61-b6924d5c78e0
  * Resources / AI tools: OpenAI ChatGPT (programming explanations, debugging,
  * and review); C standard library documentation (stdio.h, stdlib.h, string.h,
  * ctype.h, math.h, errno.h, dirent.h, sys/stat.h, sys/types.h, limits.h,
